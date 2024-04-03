@@ -698,6 +698,7 @@ static TAGS_311: Lazy<Tags> = Lazy::new(|| {
         (3, 11),
         "cpython",
         (3, 11),
+        false,
     )
     .unwrap()
 });
@@ -730,6 +731,7 @@ static TAGS_310: Lazy<Tags> = Lazy::new(|| {
         (3, 10),
         "cpython",
         (3, 10),
+        false,
     )
     .unwrap()
 });
