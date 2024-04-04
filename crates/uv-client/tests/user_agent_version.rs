@@ -1,12 +1,16 @@
 use anyhow::Result;
 use futures::future;
+use http_body_util::Full;
+use hyper::body::Bytes;
 use hyper::header::USER_AGENT;
-use hyper::server::conn::Http;
+use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Body, Request, Response};
+use hyper::{Request, Response};
+use hyper_util::rt::TokioIo;
+use tokio::net::TcpListener;
+
 use pep508_rs::{MarkerEnvironment, StringVersion};
 use platform_tags::{Arch, Os, Platform};
-use tokio::net::TcpListener;
 use uv_cache::Cache;
 use uv_client::LineHaul;
 use uv_client::RegistryClientBuilder;
@@ -19,8 +23,8 @@ async fn test_user_agent_has_version() -> Result<()> {
     let addr = listener.local_addr()?;
 
     // Spawn the server loop in a background task
-    tokio::spawn(async move {
-        let svc = service_fn(move |req: Request<Body>| {
+    let server_task = tokio::spawn(async move {
+        let svc = service_fn(move |req: Request<hyper::body::Incoming>| {
             // Get User Agent Header and send it back in the response
             let user_agent = req
                 .headers()
@@ -28,38 +32,40 @@ async fn test_user_agent_has_version() -> Result<()> {
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string())
                 .unwrap_or_default(); // Empty Default
-            future::ok::<_, hyper::Error>(Response::new(Body::from(user_agent)))
+            future::ok::<_, hyper::Error>(Response::new(Full::new(Bytes::from(user_agent))))
         });
-        // Start Hyper Server
+        // Start Server (not wrapped in loop {} since we want a single response server)
+        // If you want server to accept multiple connections, wrap it in loop {}
         let (socket, _) = listener.accept().await.unwrap();
-        Http::new()
-            .http1_keep_alive(false)
-            .serve_connection(socket, svc)
-            .with_upgrades()
-            .await
-            .expect("Server Started");
+        let socket = TokioIo::new(socket);
+        tokio::task::spawn(async move {
+            http1::Builder::new()
+                .serve_connection(socket, svc)
+                .with_upgrades()
+                .await
+                .expect("Server Started");
+        });
     });
 
     // Initialize uv-client
     let cache = Cache::temp()?;
     let client = RegistryClientBuilder::new(cache).build();
-
     // Send request to our dummy server
     let res = client
-        .uncached_client()
+        .cached_client()
+        .uncached()
         .get(format!("http://{addr}"))
         .send()
         .await?;
-
     // Check the HTTP status
     assert!(res.status().is_success());
-
     // Check User Agent
     let body = res.text().await?;
-
     // Verify body matches regex
     assert_eq!(body, format!("uv/{}", version()));
 
+    // Wait for the server task to complete, to be a good citizen.
+    server_task.await?;
     Ok(())
 }
 
@@ -68,10 +74,9 @@ async fn test_user_agent_has_linehaul() -> Result<()> {
     // Set up the TCP listener on a random available port
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-
     // Spawn the server loop in a background task
-    tokio::spawn(async move {
-        let svc = service_fn(move |req: Request<Body>| {
+    let server_task = tokio::spawn(async move {
+        let svc = service_fn(move |req: Request<hyper::body::Incoming>| {
             // Get User Agent Header and send it back in the response
             let user_agent = req
                 .headers()
@@ -79,18 +84,20 @@ async fn test_user_agent_has_linehaul() -> Result<()> {
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string())
                 .unwrap_or_default(); // Empty Default
-            future::ok::<_, hyper::Error>(Response::new(Body::from(user_agent)))
+            future::ok::<_, hyper::Error>(Response::new(Full::new(Bytes::from(user_agent))))
         });
-        // Start Hyper Server
+        // Start Server (not wrapped in loop {} since we want a single response server)
+        // If you want server to accept multiple connections, wrap it in loop {}
         let (socket, _) = listener.accept().await.unwrap();
-        Http::new()
-            .http1_keep_alive(false)
-            .serve_connection(socket, svc)
-            .with_upgrades()
-            .await
-            .expect("Server Started");
+        let socket = TokioIo::new(socket);
+        tokio::task::spawn(async move {
+            http1::Builder::new()
+                .serve_connection(socket, svc)
+                .with_upgrades()
+                .await
+                .expect("Server Started");
+        });
     });
-
     // Add some representative markers for an Ubuntu CI runner
     let markers = MarkerEnvironment {
         implementation_name: "cpython".to_string(),
@@ -114,11 +121,9 @@ async fn test_user_agent_has_linehaul() -> Result<()> {
         },
         sys_platform: "linux".to_string(),
     };
-
     // Initialize uv-client
     let cache = Cache::temp()?;
     let mut builder = RegistryClientBuilder::new(cache).markers(&markers);
-
     let linux = Platform::new(
         Os::Manylinux {
             major: 2,
@@ -139,42 +144,35 @@ async fn test_user_agent_has_linehaul() -> Result<()> {
         builder = builder.platform(&macos);
     }
     let client = builder.build();
-
     // Send request to our dummy server
     let res = client
-        .uncached_client()
+        .cached_client()
+        .uncached()
         .get(format!("http://{addr}"))
         .send()
         .await?;
-
     // Check the HTTP status
     assert!(res.status().is_success());
-
     // Check User Agent
     let body = res.text().await?;
-
+    // Wait for the server task to complete, to be a good citizen.
+    server_task.await?;
     // Unpack User-Agent with linehaul
     let (uv_version, uv_linehaul) = body
         .split_once(' ')
         .expect("Failed to split User-Agent header.");
-
     // Deserializing Linehaul
     let linehaul: LineHaul = serde_json::from_str(uv_linehaul)?;
-
     // Assert uv version
     assert_eq!(uv_version, format!("uv/{}", version()));
-
     // Assert linehaul
     let installer_info = linehaul.installer.unwrap();
     let system_info = linehaul.system.unwrap();
     let impl_info = linehaul.implementation.unwrap();
-
     assert_eq!(installer_info.name.unwrap(), "uv".to_string());
     assert_eq!(installer_info.version.unwrap(), version());
-
     assert_eq!(system_info.name.unwrap(), markers.platform_system);
     assert_eq!(system_info.release.unwrap(), markers.platform_release);
-
     assert_eq!(
         impl_info.name.unwrap(),
         markers.platform_python_implementation
@@ -183,17 +181,14 @@ async fn test_user_agent_has_linehaul() -> Result<()> {
         impl_info.version.unwrap(),
         markers.python_full_version.version.to_string()
     );
-
     assert_eq!(
         linehaul.python.unwrap(),
         markers.python_full_version.version.to_string()
     );
     assert_eq!(linehaul.cpu.unwrap(), markers.platform_machine);
-
     assert_eq!(linehaul.openssl_version, None);
     assert_eq!(linehaul.setuptools_version, None);
     assert_eq!(linehaul.rustc_version, None);
-
     if cfg!(windows) {
         assert_eq!(linehaul.distro, None);
     } else if cfg!(target_os = "linux") {
