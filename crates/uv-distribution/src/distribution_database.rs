@@ -195,6 +195,7 @@ impl<'a, Context: BuildContext + Send + Sync> DistributionDatabase<'a, Context> 
                     .stream_wheel(url.clone(), &wheel.filename, &wheel_entry, dist)
                     .await
                 {
+                    // STOPSHIP(charlie): This should have a hashes field.
                     Ok(archive) => Ok(LocalWheel::Unzipped(UnzippedWheel {
                         dist: Dist::Built(dist.clone()),
                         archive,
@@ -425,6 +426,27 @@ impl<'a, Context: BuildContext + Send + Sync> DistributionDatabase<'a, Context> 
                 reqwest::header::HeaderValue::from_static("identity"),
             )
             .build()?;
+
+        // Look at the hash. If it's present, great! If not, download the wheel and compute it.
+        // But... we can't look at the hash, because someone else could be downloading and replacing
+        // the wheel. The hash could end up being stale. So, we need a manifest concept, with
+        // pointers, like for source distributions. But how can we check if the hash is available,
+        // and then force a refresh if not? We can't look into the manifest without checking
+        // freshness.
+        //
+        // We could assume that wheels are immutable? We could ask for the cached archive; if it's
+        // present with the hash, great! Otherwise, re-run. This will require more customized
+        // methods on the cached client, like a way to filter the cache result.
+        //
+        // Yeah, I think we just want a way to filter _before_ we check if the cache is up-to-date.
+        // Because if the hash isn't present, we need to fetch either way. If the hash is present,
+        // we need to refetch if the cache isn't up-to-date.
+        //
+        // I think we still need a manifest concept though, because otherwise we might end up
+        // serving wheels that don't match the hash guarantees returned here.
+        //
+        // Wait, no we don't, because we only return archive entries here.
+
         let cache_control = match self.client.connectivity() {
             Connectivity::Online => CacheControl::from(
                 self.build_context

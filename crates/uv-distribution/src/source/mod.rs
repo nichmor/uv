@@ -346,6 +346,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 let manifest = Manifest::new();
 
                 // Download the source distribution.
+                // STOPSHIP(charlie): Should we _always_ hash here?
                 debug!("Downloading source distribution: {source}");
                 let source_dist_entry = cache_shard.shard(manifest.id()).entry(filename);
                 self.persist_url(response, source, filename, &source_dist_entry)
@@ -648,6 +649,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // manifest itself. There's also no need to lock, since we never replace entries within the
         // shard.
         let cache_shard = cache_shard.shard(manifest.id());
+
+        // STOPSHIP(charlie): This needs to include a hash, and it needs to match. Otherwise,
+        // compute it.
 
         // If the cache contains compatible metadata, return it.
         let metadata_entry = cache_shard.entry(METADATA);
