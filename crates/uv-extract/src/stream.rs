@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 use futures::StreamExt;
 use rustc_hash::FxHashSet;
-use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::warn;
 
 use crate::Error;
@@ -16,9 +16,9 @@ use crate::Error;
 pub async fn unzip<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     target: impl AsRef<Path>,
-) -> Result<(), Error> {
+) -> Result<futures::io::BufReader<Compat<R>>, Error> {
     let target = target.as_ref();
-    let mut reader = futures::io::BufReader::with_capacity(128 * 1024, reader.compat());
+    let mut reader = futures::io::BufReader::with_capacity(10 * 1024, reader.compat());
     let mut zip = async_zip::base::read::stream::ZipFileReader::new(&mut reader);
 
     let mut directories = FxHashSet::default();
@@ -94,7 +94,7 @@ pub async fn unzip<R: tokio::io::AsyncRead + Unpin>(
         }
     }
 
-    Ok(())
+    Ok(reader)
 }
 
 /// Unpack the given tar archive into the destination directory.

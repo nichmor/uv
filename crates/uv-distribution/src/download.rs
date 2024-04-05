@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use distribution_filename::WheelFilename;
 use distribution_types::{CachedDist, Dist};
-use pypi_types::Metadata23;
+use pypi_types::{HashDigest, Metadata23};
 
 use crate::Error;
 
@@ -16,6 +16,8 @@ pub struct UnzippedWheel {
     /// The canonicalized path in the cache directory to which the wheel was downloaded.
     /// Typically, a directory within the archive bucket.
     pub(crate) archive: PathBuf,
+    /// The computed hashes of the wheel.
+    pub(crate) hashes: Vec<HashDigest>,
 }
 
 /// A downloaded wheel that's stored on-disk.
@@ -30,6 +32,8 @@ pub struct DiskWheel {
     /// The expected path to the downloaded wheel's entry in the cache.
     /// Typically, a symlink within the wheels or built wheels bucket.
     pub(crate) target: PathBuf,
+    /// The computed hashes of the wheel.
+    pub(crate) hashes: Vec<HashDigest>,
 }
 
 /// A wheel built from a source distribution that's stored on-disk.
@@ -44,6 +48,8 @@ pub struct BuiltWheel {
     /// The expected path to the downloaded wheel's entry in the cache.
     /// Typically, a symlink within the wheels or built wheels bucket.
     pub(crate) target: PathBuf,
+    /// The computed hashes of the wheel.
+    pub(crate) hashes: Vec<HashDigest>,
 }
 
 /// A downloaded or built wheel.
@@ -79,6 +85,15 @@ impl LocalWheel {
             Self::Unzipped(wheel) => &wheel.filename,
             Self::Disk(wheel) => &wheel.filename,
             Self::Built(wheel) => &wheel.filename,
+        }
+    }
+
+    /// Return the computed hashes of the wheel.
+    pub fn hashes(&self) -> &[HashDigest] {
+        match self {
+            Self::Unzipped(wheel) => &wheel.hashes,
+            Self::Disk(wheel) => &wheel.hashes,
+            Self::Built(wheel) => &wheel.hashes,
         }
     }
 

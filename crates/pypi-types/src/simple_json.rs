@@ -122,7 +122,7 @@ impl Default for Yanked {
     }
 }
 
-#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum HashAlgorithm {
     Md5,
     Sha256,
@@ -145,9 +145,10 @@ impl FromStr for HashAlgorithm {
 }
 
 /// A hash name and hex encoded digest of the file.
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct HashDigest {
     pub algorithm: HashAlgorithm,
+    // TODO(charlie): This should be a Vec<u8>.
     pub digest: String,
 }
 

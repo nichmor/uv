@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use distribution_filename::WheelFilename;
 use platform_tags::Tags;
+use pypi_types::HashDigest;
 use uv_cache::CacheShard;
 use uv_fs::files;
 
@@ -15,6 +16,8 @@ pub struct BuiltWheelMetadata {
     pub(crate) target: PathBuf,
     /// The parsed filename.
     pub(crate) filename: WheelFilename,
+    /// The computed hashes of the wheel.
+    pub(crate) hashes: Vec<HashDigest>,
 }
 
 impl BuiltWheelMetadata {

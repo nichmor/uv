@@ -78,6 +78,10 @@ pub enum Error {
     /// Should not occur; only seen when another task panicked.
     #[error("The task executor is broken, did some other task panic?")]
     Join(#[from] JoinError),
+
+    /// An I/O error that occurs while exhausting a reader to compute a hash.
+    #[error(transparent)]
+    HashExhaustion(#[from] std::io::Error),
 }
 
 impl From<reqwest::Error> for Error {

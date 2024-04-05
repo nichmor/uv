@@ -2,7 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use futures::{FutureExt, TryStreamExt};
+use futures::{AsyncReadExt, FutureExt, TryStreamExt};
 use tokio::io::AsyncSeekExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info_span, instrument, warn, Instrument};
@@ -13,14 +13,21 @@ use distribution_types::{
     BuildableSource, BuiltDist, Dist, FileLocation, IndexLocations, LocalEditable, Name, SourceDist,
 };
 use platform_tags::Tags;
-use pypi_types::Metadata23;
+use pypi_types::{HashAlgorithm, HashDigest, Metadata23};
 use uv_cache::{ArchiveTarget, ArchiveTimestamp, CacheBucket, CacheEntry, WheelCache};
 use uv_client::{CacheControl, CachedClientError, Connectivity, RegistryClient};
+use uv_extract::hash::Hasher;
 use uv_types::{BuildContext, NoBinary, NoBuild};
 
 use crate::download::{BuiltWheel, UnzippedWheel};
 use crate::locks::Locks;
 use crate::{DiskWheel, Error, LocalWheel, Reporter, SourceDistributionBuilder};
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct HashedArchive {
+    path: PathBuf,
+    hashes: Vec<HashDigest>,
+}
 
 /// A cached high-level interface to convert distributions (a requirement resolved to a location)
 /// to a wheel or wheel metadata.
@@ -154,6 +161,7 @@ impl<'a, Context: BuildContext + Send + Sync> DistributionDatabase<'a, Context> 
 
                         // If the file is already unzipped, and the unzipped directory is fresh,
                         // return it.
+                        // TODO(charlie): Store the hashes...
                         match cache_entry.path().canonicalize() {
                             Ok(archive) => {
                                 if ArchiveTimestamp::up_to_date_with(
@@ -166,6 +174,7 @@ impl<'a, Context: BuildContext + Send + Sync> DistributionDatabase<'a, Context> 
                                         dist: Dist::Built(dist.clone()),
                                         archive,
                                         filename: wheel.filename.clone(),
+                                        hashes: vec![],
                                     }));
                                 }
                             }
@@ -179,6 +188,8 @@ impl<'a, Context: BuildContext + Send + Sync> DistributionDatabase<'a, Context> 
                             path: path.clone(),
                             target: cache_entry.into_path_buf(),
                             filename: wheel.filename.clone(),
+                            // TODO(charlie): Compute the hashes.
+                            hashes: vec![],
                         }));
                     }
                 };
@@ -198,7 +209,8 @@ impl<'a, Context: BuildContext + Send + Sync> DistributionDatabase<'a, Context> 
                     // STOPSHIP(charlie): This should have a hashes field.
                     Ok(archive) => Ok(LocalWheel::Unzipped(UnzippedWheel {
                         dist: Dist::Built(dist.clone()),
-                        archive,
+                        archive: archive.path,
+                        hashes: archive.hashes,
                         filename: wheel.filename.clone(),
                     })),
                     Err(Error::Extract(err)) if err.is_http_streaming_unsupported() => {
@@ -386,9 +398,16 @@ impl<'a, Context: BuildContext + Send + Sync> DistributionDatabase<'a, Context> 
         filename: &WheelFilename,
         wheel_entry: &CacheEntry,
         dist: &BuiltDist,
-    ) -> Result<PathBuf, Error> {
+        // hashes: Vec<HashAlgorithm>,
+    ) -> Result<HashedArchive, Error> {
         // Create an entry for the HTTP cache.
         let http_entry = wheel_entry.with_file(format!("{}.http", filename.stem()));
+
+        let hashes = vec![
+            HashAlgorithm::Sha256,
+            HashAlgorithm::Md5,
+            HashAlgorithm::Sha512,
+        ];
 
         let download = |response: reqwest::Response| {
             async {
@@ -397,19 +416,34 @@ impl<'a, Context: BuildContext + Send + Sync> DistributionDatabase<'a, Context> 
                     .map_err(|err| self.handle_response_errors(err))
                     .into_async_read();
 
+                // Create a hasher for each hash algorithm.
+                let mut hashers = hashes.iter().map(Hasher::from).collect::<Vec<_>>();
+                let reader = uv_extract::hash::HashReader::new(reader.compat(), &mut hashers);
+
                 // Download and unzip the wheel to a temporary directory.
                 let temp_dir = tempfile::tempdir_in(self.build_context.cache().root())
                     .map_err(Error::CacheWrite)?;
-                uv_extract::stream::unzip(reader.compat(), temp_dir.path()).await?;
+                let mut reader = uv_extract::stream::unzip(reader, temp_dir.path()).await?;
+
+                // If necessary, exhaust the reader to compute the hash.
+                if !hashes.is_empty() {
+                    reader
+                        .read_to_end(&mut Vec::new())
+                        .await
+                        .map_err(Error::HashExhaustion)?;
+                }
 
                 // Persist the temporary directory to the directory store.
-                let archive = self
+                let path = self
                     .build_context
                     .cache()
                     .persist(temp_dir.into_path(), wheel_entry.path())
                     .await
                     .map_err(Error::CacheRead)?;
-                Ok(archive)
+                Ok(HashedArchive {
+                    path,
+                    hashes: hashers.into_iter().map(HashDigest::from).collect(),
+                })
             }
             .instrument(info_span!("wheel", wheel = %dist))
         };
@@ -466,6 +500,8 @@ impl<'a, Context: BuildContext + Send + Sync> DistributionDatabase<'a, Context> 
                 CachedClientError::Callback(err) => err,
                 CachedClientError::Client(err) => Error::Client(err),
             })?;
+
+        println!("archive: {:?}", archive);
 
         Ok(archive)
     }
