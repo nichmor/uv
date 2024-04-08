@@ -4792,6 +4792,7 @@ dependencies = [
  "anyhow",
  "fs-err",
  "futures",
+ "once_cell",
  "reqwest",
  "reqwest-middleware",
  "tempfile",
