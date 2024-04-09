@@ -68,11 +68,7 @@ where
     ))
 }
 
-#[derive(
-    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize,
-)]
-#[archive(check_bytes)]
-#[archive_attr(derive(Debug))]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum DistInfoMetadata {
     Bool(bool),
@@ -125,23 +121,7 @@ impl Default for Yanked {
 /// A dictionary mapping a hash name to a hex encoded digest of the file.
 ///
 /// PEP 691 says multiple hashes can be included and the interpretation is left to the client.
-#[derive(
-    Debug,
-    Clone,
-    Ord,
-    PartialOrd,
-    Eq,
-    PartialEq,
-    Hash,
-    Default,
-    Serialize,
-    Deserialize,
-    rkyv::Archive,
-    rkyv::Deserialize,
-    rkyv::Serialize,
-)]
-#[archive(check_bytes)]
-#[archive_attr(derive(Debug))]
+#[derive(Debug, Clone, Eq, PartialEq, Default, Deserialize)]
 pub struct Hashes {
     pub md5: Option<Box<str>>,
     pub sha256: Option<Box<str>>,
